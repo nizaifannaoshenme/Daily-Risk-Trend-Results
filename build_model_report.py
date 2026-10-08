@@ -14,8 +14,10 @@ OUTPUT_DIR = Path("model_output")
 REPORT_TITLE = "风险趋势日度结果"
 
 SIGNAL_FILTERS = ["无", "局部底左侧信号", "局部底右侧信号", "局部顶左侧信号", "局部顶右侧信号"]
+# 展示顺序；数据里出现的其他类别会按首次出现顺序接在后面，不会被丢掉。
+CATEGORY_ORDER = ["宽基指数", "商品期货", "申万一级行业"]
 RESULT_COLUMNS = [
-    "日期", "代码", "简称", "总市值(亿元)", "成交额(亿元)", "收盘价", "当日涨跌幅(%)",
+    "日期", "代码", "简称", "类别", "总市值(亿元)", "成交额(亿元)", "收盘价", "当日涨跌幅(%)",
     "风险度", "综合动量", "TMP", "JAX", "综合评分", "局部顶底提示建议",
 ]
 
@@ -51,25 +53,37 @@ def signal_group(value: str) -> str:
     return value[:-1] if value.endswith(("1", "2")) else value
 
 
+def result_cells(row: dict[str, Any]) -> list[tuple[str, str]]:
+    """(css class, rendered value) per column, in RESULT_COLUMNS order."""
+    return [
+        ("", text(row["日期"])),
+        ("code", text(row["代码"])),
+        ("", text(row["简称"])),
+        ("cat", text(row["类别"])),
+        ("num", number(row["总市值(亿元)"])),
+        ("num", number(row["成交额(亿元)"])),
+        ("num", number(row["收盘价"], 4)),
+        ("num", number(row["当日涨跌幅(%)"])),
+        (f"num {risk_class(row['风险度'])}", number(row["风险度"])),
+        ("num", number(row["综合动量"])),
+        (direction_class(row["TMP"]), text(row["TMP"])),
+        (direction_class(row["JAX"]), text(row["JAX"])),
+        (f"num {score_class(row['综合评分'])}", number(row["综合评分"])),
+        ("signal", text(row["局部顶底提示建议"])),
+    ]
+
+
 def result_row(row: dict[str, Any]) -> str:
     group = signal_group(row["局部顶底提示建议"])
-    values = [
-        f"<td data-result-column='0'>{text(row['日期'])}</td>",
-        f"<td data-result-column='1' class='code'>{text(row['代码'])}</td>",
-        f"<td data-result-column='2'>{text(row['简称'])}</td>",
-        f"<td data-result-column='3' class='num'>{number(row['总市值(亿元)'])}</td>",
-        f"<td data-result-column='4' class='num'>{number(row['成交额(亿元)'])}</td>",
-        f"<td data-result-column='5' class='num'>{number(row['收盘价'], 4)}</td>",
-        f"<td data-result-column='6' class='num'>{number(row['当日涨跌幅(%)'])}</td>",
-        f"<td data-result-column='7' class='num {risk_class(row['风险度'])}'>{number(row['风险度'])}</td>",
-        f"<td data-result-column='8' class='num'>{number(row['综合动量'])}</td>",
-        f"<td data-result-column='9' class='{direction_class(row['TMP'])}'>{text(row['TMP'])}</td>",
-        f"<td data-result-column='10' class='{direction_class(row['JAX'])}'>{text(row['JAX'])}</td>",
-        f"<td data-result-column='11' class='num {score_class(row['综合评分'])}'>{number(row['综合评分'])}</td>",
-        f"<td data-result-column='12' class='signal'>{text(row['局部顶底提示建议'])}</td>",
-    ]
+    body = "".join(
+        f"<td data-result-column='{index}'"
+        + (f" class='{css.strip()}'" if css.strip() else "")
+        + f">{value}</td>"
+        for index, (css, value) in enumerate(result_cells(row))
+    )
     return (f"<tr data-date='{text(row['日期'])}' data-name='{text(row['简称'])}' "
-            f"data-signal-group='{text(group)}'>" + "".join(values) + "</tr>")
+            f"data-category='{text(row['类别'])}' data-signal-group='{text(group)}'>"
+            f"{body}</tr>")
 
 
 def audit_row(row: dict[str, Any]) -> str:
@@ -119,6 +133,20 @@ def main() -> None:
     name_options_html = "\n".join(
         f"<label><input type='checkbox' data-name-filter='{html.escape(name)}' checked> {html.escape(name)}</label>"
         for name in available_names
+    )
+    seen_categories = list(dict.fromkeys(row["类别"] for row in records))
+    available_categories = ([c for c in CATEGORY_ORDER if c in seen_categories]
+                            + [c for c in seen_categories if c not in CATEGORY_ORDER])
+    category_options_html = "\n".join(
+        f"<label><input type='checkbox' data-category-filter='{html.escape(name)}' checked> {html.escape(name)}</label>"
+        for name in available_categories
+    )
+    # 表头由 RESULT_COLUMNS 生成，列数与 result_cells 不一致时直接报错而非静默错位
+    if records and len(result_cells(records[0])) != len(RESULT_COLUMNS):
+        raise RuntimeError("result_cells 与 RESULT_COLUMNS 列数不一致")
+    header_cells_html = "".join(
+        f"<th data-result-column='{index}'>{html.escape(label)}</th>"
+        for index, label in enumerate(RESULT_COLUMNS)
     )
     signal_options_html = "\n".join(
         f"<label><input type='checkbox' data-signal-filter='{html.escape(signal)}' checked> {html.escape(signal)}</label>"
@@ -173,6 +201,8 @@ def main() -> None:
   .toolbar {{ background:#fff; border:1px solid var(--line); border-bottom:0; padding:11px 16px; display:flex; align-items:center; flex-wrap:wrap; gap:12px; color:#17365d; font-weight:600; }}
   .filter-picker,.column-picker {{ position:relative; }} .filter-picker summary,.column-picker summary {{ cursor:pointer; border:1px solid #9dc3e6; border-radius:3px; padding:6px 9px; background:#fff; list-style:none; }} .filter-picker summary::-webkit-details-marker,.column-picker summary::-webkit-details-marker {{ display:none; }}
   .filter-picker[open] summary,.column-picker[open] summary {{ border-bottom-left-radius:0; border-bottom-right-radius:0; background:#d9eaf7; }} .filter-list,.column-list {{ position:absolute; z-index:3; top:31px; width:220px; max-height:310px; overflow-y:auto; padding:9px 11px; border:1px solid #9dc3e6; background:#fff; box-shadow:0 3px 10px #bac5d3; }} .filter-list {{ left:0; }} .column-list {{ right:0; }} .filter-list label,.column-list label {{ display:block; padding:4px 0; color:#172033; font-weight:400; }} .filter-actions {{ display:flex; gap:8px; padding-bottom:7px; margin-bottom:5px; border-bottom:1px solid #d9e1f2; }} .filter-actions button {{ cursor:pointer; border:1px solid #9dc3e6; border-radius:3px; padding:3px 7px; background:#f7fbff; color:#17365d; font:inherit; font-size:12px; }} .column-hidden {{ display:none; }}
+  .sort-pick {{ display:flex; align-items:center; gap:6px; }} .sort-pick select {{ cursor:pointer; border:1px solid #9dc3e6; border-radius:3px; padding:5px 7px; background:#fff; color:#17365d; font:inherit; }}
+  .cat {{ color:#1f4e78; }}
   #visible-count {{ color:var(--muted); font-weight:400; }}
   .note ul {{ margin:7px 0 0; padding-left:20px; line-height:1.65; }}
   h2 {{ font-size:16px; margin:0; padding:12px 16px; color:#fff; background:#1f4e78; }}
@@ -194,8 +224,8 @@ def main() -> None:
 <section class='summary'><div class='card'><strong>{len(coverage)}</strong><span>覆盖指数</span></div><div class='card'><strong>{len(set(row['日期'] for row in records))}</strong><span>交易日</span></div><div class='card'><strong>{len(records)}</strong><span>结果记录</span></div><div class='card'><strong>{sum(row['局部顶底提示建议'] != '无' for row in records)}</strong><span>触发提示</span></div></section>
 {note_section}
 <h2>结果明细</h2>
-<div class='toolbar'><details class='filter-picker'><summary id='date-filter-summary'>日期（全部）</summary><div class='filter-list'><div class='filter-actions'><button type='button' data-filter-action='dates-all'>全选</button><button type='button' data-filter-action='dates-none'>清空</button></div>{date_options_html}</div></details><details class='filter-picker'><summary id='name-filter-summary'>简称（全部）</summary><div class='filter-list'><div class='filter-actions'><button type='button' data-filter-action='names-all'>全选</button><button type='button' data-filter-action='names-none'>清空</button></div>{name_options_html}</div></details><details class='filter-picker'><summary id='signal-filter-summary'>顶底提示（全部）</summary><div class='filter-list'><div class='filter-actions'><button type='button' data-filter-action='signals-all'>全选</button><button type='button' data-filter-action='signals-none'>清空</button></div>{signal_options_html}</div></details><details class='column-picker'><summary>显示/隐藏列</summary><div class='column-list'>{column_options_html}</div></details><span id='visible-count'></span></div>
-<div class='table-wrap'><table id='result-table'><thead><tr><th data-result-column='0'>日期</th><th data-result-column='1'>代码</th><th data-result-column='2'>简称</th><th data-result-column='3'>总市值(亿元)</th><th data-result-column='4'>成交额(亿元)</th><th data-result-column='5'>收盘价</th><th data-result-column='6'>当日涨跌幅(%)</th><th data-result-column='7'>风险度</th><th data-result-column='8'>综合动量</th><th data-result-column='9'>TMP</th><th data-result-column='10'>JAX</th><th data-result-column='11'>综合评分</th><th data-result-column='12'>局部顶底提示建议</th></tr></thead><tbody id='result-body'>{records_html}</tbody></table></div>
+<div class='toolbar'><details class='filter-picker'><summary id='date-filter-summary'>日期（全部）</summary><div class='filter-list'><div class='filter-actions'><button type='button' data-filter-action='dates-all'>全选</button><button type='button' data-filter-action='dates-none'>清空</button></div>{date_options_html}</div></details><details class='filter-picker'><summary id='name-filter-summary'>简称（全部）</summary><div class='filter-list'><div class='filter-actions'><button type='button' data-filter-action='names-all'>全选</button><button type='button' data-filter-action='names-none'>清空</button></div>{name_options_html}</div></details><details class='filter-picker'><summary id='category-filter-summary'>类别（全部）</summary><div class='filter-list'><div class='filter-actions'><button type='button' data-filter-action='categories-all'>全选</button><button type='button' data-filter-action='categories-none'>清空</button></div>{category_options_html}</div></details><details class='filter-picker'><summary id='signal-filter-summary'>顶底提示（全部）</summary><div class='filter-list'><div class='filter-actions'><button type='button' data-filter-action='signals-all'>全选</button><button type='button' data-filter-action='signals-none'>清空</button></div>{signal_options_html}</div></details><label class='sort-pick'>日期排序<select id='date-sort'><option value='asc'>升序（早→晚）</option><option value='desc'>降序（晚→早）</option></select></label><details class='column-picker'><summary>显示/隐藏列</summary><div class='column-list'>{column_options_html}</div></details><span id='visible-count'></span></div>
+<div class='table-wrap'><table id='result-table'><thead><tr>{header_cells_html}</tr></thead><tbody id='result-body'>{records_html}</tbody></table></div>
 {audit_section}
 {coverage_section}
 {footer_section}
@@ -206,10 +236,16 @@ def main() -> None:
   const table = document.getElementById('result-table');
   const dateInputs = Array.from(document.querySelectorAll('[data-date-filter]'));
   const nameInputs = Array.from(document.querySelectorAll('[data-name-filter]'));
+  const categoryInputs = Array.from(document.querySelectorAll('[data-category-filter]'));
   const signalInputs = Array.from(document.querySelectorAll('[data-signal-filter]'));
   const dateSummary = document.getElementById('date-filter-summary');
   const nameSummary = document.getElementById('name-filter-summary');
+  const categorySummary = document.getElementById('category-filter-summary');
   const signalSummary = document.getElementById('signal-filter-summary');
+  const body = document.getElementById('result-body');
+  const sortSelect = document.getElementById('date-sort');
+  // 记下初始顺序（按日期、代码升序），同日内据此保持代码升序，排序只翻转日期
+  rows.forEach((row, index) => {{ row.dataset.order = index; }});
   const selectedValues = (inputs, attribute) => new Set(inputs.filter((input) => input.checked).map((input) => input.dataset[attribute]));
   const updateSummary = (summary, label, selected, total) => {{
     summary.textContent = selected === total ? `${{label}}（全部）` : `${{label}}（已选 ${{selected}}/${{total}}）`;
@@ -217,10 +253,12 @@ def main() -> None:
   const applyFilters = () => {{
     const selectedDates = selectedValues(dateInputs, 'dateFilter');
     const selectedNames = selectedValues(nameInputs, 'nameFilter');
+    const selectedCategories = selectedValues(categoryInputs, 'categoryFilter');
     const selectedSignals = selectedValues(signalInputs, 'signalFilter');
     let visible = 0;
     rows.forEach((row) => {{
       const show = selectedDates.has(row.dataset.date) && selectedNames.has(row.dataset.name)
+        && selectedCategories.has(row.dataset.category)
         && selectedSignals.has(row.dataset.signalGroup);
       row.hidden = !show;
       if (show) visible += 1;
@@ -228,14 +266,30 @@ def main() -> None:
     count.textContent = `显示 ${{visible}} / ${{rows.length}} 条`;
     updateSummary(dateSummary, '日期', selectedDates.size, dateInputs.length);
     updateSummary(nameSummary, '简称', selectedNames.size, nameInputs.length);
+    updateSummary(categorySummary, '类别', selectedCategories.size, categoryInputs.length);
     updateSummary(signalSummary, '顶底提示', selectedSignals.size, signalInputs.length);
   }};
-  dateInputs.concat(nameInputs, signalInputs).forEach((checkbox) => checkbox.addEventListener('change', applyFilters));
+  dateInputs.concat(nameInputs, categoryInputs, signalInputs)
+    .forEach((checkbox) => checkbox.addEventListener('change', applyFilters));
+  const applySort = () => {{
+    const descending = sortSelect.value === 'desc';
+    const ordered = rows.slice().sort((a, b) => {{
+      const byDate = a.dataset.date.localeCompare(b.dataset.date);
+      if (byDate !== 0) return descending ? -byDate : byDate;
+      return Number(a.dataset.order) - Number(b.dataset.order);
+    }});
+    // 一次性搬进 fragment 再回插，避免逐行 appendChild 触发上千次重排
+    const fragment = document.createDocumentFragment();
+    ordered.forEach((row) => fragment.appendChild(row));
+    body.appendChild(fragment);
+  }};
+  sortSelect.addEventListener('change', applySort);
   document.querySelectorAll('[data-filter-action]').forEach((button) => {{
     button.addEventListener('click', () => {{
       const action = button.dataset.filterAction;
       const inputs = action.startsWith('dates') ? dateInputs
-        : action.startsWith('names') ? nameInputs : signalInputs;
+        : action.startsWith('names') ? nameInputs
+        : action.startsWith('categories') ? categoryInputs : signalInputs;
       const checked = action.endsWith('all');
       inputs.forEach((input) => {{ input.checked = checked; }});
       applyFilters();
@@ -249,6 +303,7 @@ def main() -> None:
       }});
     }});
   }});
+  applySort();
   applyFilters();
 }})();
 </script></body></html>"""
