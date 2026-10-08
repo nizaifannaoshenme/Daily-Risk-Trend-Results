@@ -1,0 +1,56 @@
+name: Build and deploy report
+
+# 本地推送新的 JSON 后自动重建页面；Wind 只能在本地跑，所以仓库里存的是
+# 算好的结果数据，渲染这一步不需要 Wind、pandas 或任何第三方库。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'model_output/risk_trend_model_results.json'
+      - 'build_model_report.py'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Render reports
+        run: python build_model_report.py
+
+      - name: Stage the 简版 report as the site index
+        run: |
+          mkdir -p site
+          clean=$(ls model_output/*_简版.html)
+          echo "Publishing: $clean"
+          cp "$clean" site/index.html
+          ls -lh site/index.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

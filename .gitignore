@@ -1,0 +1,3 @@
+# 完整版报告由 Actions 一并生成但不发布，也不提交
+model_output/*.html
+__pycache__/
